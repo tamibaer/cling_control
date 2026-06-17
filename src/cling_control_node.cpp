@@ -1,4 +1,6 @@
 #include <memory>
+#include <map>
+#include <string>
 #include <rclcpp/executors/single_threaded_executor.hpp>
 #include <thread>
 #include <vector>
@@ -10,7 +12,6 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 int main(int argc, char * argv[])
 {
@@ -26,6 +27,11 @@ int main(int argc, char * argv[])
 
   using moveit::planning_interface::MoveGroupInterface;
   auto move_group_interface = MoveGroupInterface(node, "ur5e_arm");
+
+  auto gripper = MoveGroupInterface(node, "robotiq_gripper");
+  gripper.setMaxVelocityScalingFactor(0.5);
+  gripper.setMaxAccelerationScalingFactor(0.5);
+
   auto moveit_visual_tools = moveit_visual_tools::MoveItVisualTools{
     node, "world", rviz_visual_tools::RVIZ_MARKER_TOPIC, move_group_interface.getRobotModel()
   };
@@ -52,125 +58,196 @@ int main(int argc, char * argv[])
   };
 
   move_group_interface.setPoseReferenceFrame("ur5e_base_link");
-
- 
   move_group_interface.setPlannerId("RRTConnect");
-  move_group_interface.setPlanningTime(10.0);          
-  move_group_interface.setNumPlanningAttempts(10);    
+  move_group_interface.setPlanningTime(10.0);
+  move_group_interface.setNumPlanningAttempts(10);
   move_group_interface.setMaxVelocityScalingFactor(0.2);
   move_group_interface.setMaxAccelerationScalingFactor(0.2);
 
-  move_group_interface.setWorkspace(0.0, -0.5, 0.0,  0.8, 0.5, 1.0);
-
-  move_group_interface.setGoalPositionTolerance(0.005);
-  move_group_interface.setGoalOrientationTolerance(0.01);
-
-  auto const approach_pose = [] {
-    geometry_msgs::msg::Pose msg;
-    tf2::Quaternion q;
-    q.setRPY(M_PI, 0.0, 0.0);  
-    msg.orientation = tf2::toMsg(q);
-    msg.position.x = -0.3;
-    msg.position.y = 0.4;
-    msg.position.z = 0.5;
-    return msg;
-  }();
-
-move_group_interface.setPoseTarget(approach_pose);
-
-  auto make_jc = [](const std::string& name, double pos, double tol) {
-    moveit_msgs::msg::JointConstraint jc;
-    jc.joint_name = name;
-    jc.position = pos;
-    jc.tolerance_above = tol;
-    jc.tolerance_below = tol;
-    jc.weight = 1.0;
-    return jc;
+  // ===== Gripper-Steuerung =====  <-- "close"/"open" ggf. an SRDF anpassen
+  auto gripper_action = [&](const std::string& named_target, const std::string& label) -> bool {
+    gripper.setNamedTarget(named_target);
+    draw_title("Gripper: " + label);
+    moveit_visual_tools.trigger();
+    bool ok = static_cast<bool>(gripper.move());
+    if (!ok) RCLCPP_ERROR(logger, "Gripper '%s' fehlgeschlagen!", label.c_str());
+    return ok;
   };
 
-  moveit_msgs::msg::Constraints path_constraints;
-  path_constraints.joint_constraints.push_back(make_jc("ur5e_elbow_joint",        1.2625, 1.5));
-  path_constraints.joint_constraints.push_back(make_jc("ur5e_shoulder_pan_joint", 1.4160, 1.5));
-  path_constraints.joint_constraints.push_back(make_jc("ur5e_wrist_1_joint",     -1.4886, 1.5));
-  path_constraints.joint_constraints.push_back(make_jc("ur5e_wrist_2_joint",     -1.4, 1.5));
+  // ===== Ziel-Konfigurationen =====
+  const std::map<std::string, double> pick_joints = {
+    {"ur5e_shoulder_pan_joint",  -1.1327},
+    {"ur5e_shoulder_lift_joint", -1.6820},
+    {"ur5e_elbow_joint",         -2.1871},
+    {"ur5e_wrist_1_joint",        0.7017},
+    {"ur5e_wrist_2_joint",        1.1130},
+    {"ur5e_wrist_3_joint",       -1.5570}
+  };
+  // Pose 1: Greifposition (erste Messung)
+  const std::map<std::string, double> pose1_joints = {
+    {"ur5e_shoulder_pan_joint",  -1.3274},
+    {"ur5e_shoulder_lift_joint", -1.6607},
+    {"ur5e_elbow_joint",         -1.6084},
+    {"ur5e_wrist_1_joint",       -0.8260},
+    {"ur5e_wrist_2_joint",        1.4179},
+    {"ur5e_wrist_3_joint",       -1.3555}
+  };
+  const std::map<std::string, double> home_joints = {
+    {"ur5e_shoulder_pan_joint",   0.0},
+    {"ur5e_shoulder_lift_joint", -1.5708},
+    {"ur5e_elbow_joint",          0.0},
+    {"ur5e_wrist_1_joint",       -1.5708},
+    {"ur5e_wrist_2_joint",        0.0},
+    {"ur5e_wrist_3_joint",        0.0}
+  };
 
-  move_group_interface.setPathConstraints(path_constraints);
-
-  prompt("Press 'Next' to plan the approach pose");
-  draw_title("Planning Approach");
-  moveit_visual_tools.trigger();
-
-  auto const [success, plan] = [&move_group_interface]{
-    moveit::planning_interface::MoveGroupInterface::Plan msg;
-    auto const ok = static_cast<bool>(move_group_interface.plan(msg));
-    return std::make_pair(ok, msg);
-  }();
-
-  if (!success) {
-    draw_title("Approach Planning Failed!");
+  // ===== Hilfsfunktion: zu einer Joint-Konfiguration planen + ausführen =====
+  auto move_to_joints = [&](const std::map<std::string, double>& joints,
+                            const std::string& label) -> bool {
+    move_group_interface.setJointValueTarget(joints);
+    draw_title("Planning: " + label);
     moveit_visual_tools.trigger();
-    RCLCPP_ERROR(logger, "Approach planning failed!");
-    rclcpp::shutdown();
-    spinner.join();
-    return 1;
+
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    if (!static_cast<bool>(move_group_interface.plan(plan))) {
+      draw_title(label + " Planning Failed!");
+      moveit_visual_tools.trigger();
+      RCLCPP_ERROR(logger, "%s planning failed!", label.c_str());
+      return false;
+    }
+    draw_trajectory_tool_path(plan.trajectory);
+    moveit_visual_tools.trigger();
+    draw_title("Executing: " + label);
+    moveit_visual_tools.trigger();
+    move_group_interface.execute(plan);
+    return true;
+  };
+
+  // ===== Hilfsfunktion: kartesisch um (dx, dy, dz) verschieben =====
+  auto move_cartesian_delta = [&](double dx, double dy, double dz, const std::string& label) -> bool {
+    auto current_stamped = move_group_interface.getCurrentPose();
+    geometry_msgs::msg::PoseStamped pose_in_base;
+    try {
+      pose_in_base = tf_buffer->transform(
+          current_stamped, "ur5e_base_link", tf2::durationFromSec(1.0));
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_ERROR(logger, "TF transform failed: %s", ex.what());
+      return false;
+    }
+    geometry_msgs::msg::Pose target = pose_in_base.pose;
+    target.position.x += dx;
+    target.position.y += dy;
+    target.position.z += dz;
+
+    RCLCPP_INFO(logger, "%s: delta (%.3f, %.3f, %.3f) -> [%.3f, %.3f, %.3f]",
+                label.c_str(), dx, dy, dz,
+                target.position.x, target.position.y, target.position.z);
+
+    std::vector<geometry_msgs::msg::Pose> waypoints{target};
+    moveit_msgs::msg::RobotTrajectory trajectory;
+    double fraction = move_group_interface.computeCartesianPath(
+        waypoints, 0.01, 0.0, trajectory);
+
+    RCLCPP_INFO(logger, "%s: Cartesian %.1f%% achieved", label.c_str(), fraction * 100.0);
+    if (fraction > 0.95) {
+      draw_trajectory_tool_path(trajectory);
+      moveit_visual_tools.trigger();
+      draw_title("Executing: " + label);
+      moveit_visual_tools.trigger();
+      move_group_interface.execute(trajectory);
+      return true;
+    }
+    draw_title(label + " Cartesian Failed!");
+    moveit_visual_tools.trigger();
+    RCLCPP_ERROR(logger, "%s cartesian failed (%.1f%%)", label.c_str(), fraction * 100.0);
+    return false;
+  };
+
+  // ===== Hilfsfunktion: kartesisch zu einer Ziel-TCP-Pose (Koordinaten) =====
+  auto move_cartesian_to = [&](double x, double y, double z,
+                               double qx, double qy, double qz, double qw,
+                               const std::string& label) -> bool {
+    geometry_msgs::msg::Pose target;
+    target.position.x = x; target.position.y = y; target.position.z = z;
+    target.orientation.x = qx; target.orientation.y = qy;
+    target.orientation.z = qz; target.orientation.w = qw;
+
+    std::vector<geometry_msgs::msg::Pose> waypoints{target};
+    moveit_msgs::msg::RobotTrajectory trajectory;
+    double fraction = move_group_interface.computeCartesianPath(
+        waypoints, 0.01, 0.0, trajectory);
+
+    RCLCPP_INFO(logger, "%s: Cartesian %.1f%% achieved", label.c_str(), fraction * 100.0);
+    if (fraction > 0.95) {
+      draw_trajectory_tool_path(trajectory);
+      moveit_visual_tools.trigger();
+      draw_title("Executing: " + label);
+      moveit_visual_tools.trigger();
+      move_group_interface.execute(trajectory);
+      return true;
+    }
+    draw_title(label + " Cartesian Failed!");
+    moveit_visual_tools.trigger();
+    RCLCPP_ERROR(logger, "%s cartesian failed (%.1f%%)", label.c_str(), fraction * 100.0);
+    return false;
+  };
+
+  // ===== Gripper am Anfang schließen =====
+  prompt("Press 'Next' to CLOSE gripper (start)");
+  if (rclcpp::ok()) gripper_action("close", "Close");
+
+  // ===== Dauerschleife =====
+  int cycle = 0;
+  while (rclcpp::ok()) {
+    cycle++;
+    RCLCPP_INFO(logger, "=== Zyklus %d ===", cycle);
+
+    prompt("Press 'Next' to move to PICK pose (or Ctrl+C to quit)");
+    if (!rclcpp::ok()) break;
+    if (!move_to_joints(pick_joints, "Pick")) break;
+
+    prompt("Press 'Next' for cartesian DOWN");
+    if (!rclcpp::ok()) break;
+    move_cartesian_delta(0.0, 0.0, -0.1, "Down");
+
+    // Nach dem Runterfahren: Gripper öffnen
+    prompt("Press 'Next' to OPEN gripper");
+    if (!rclcpp::ok()) break;
+    gripper_action("open", "Open");
+
+    // Zu Pose 1 (Greifposition) fahren
+    prompt("Press 'Next' to move to POSE 1");
+    if (!rclcpp::ok()) break;
+    if (!move_to_joints(pose1_joints, "Pose1")) break;
+
+    // Gripper schließen (greifen)
+    prompt("Press 'Next' to CLOSE gripper");
+    if (!rclcpp::ok()) break;
+    gripper_action("close", "Close");
+
+    // Kartesisch zu Pose 2 (Koordinaten aus tf2_echo)
+    prompt("Press 'Next' for cartesian move to POSE 2");
+    if (!rclcpp::ok()) break;
+    move_cartesian_to(0.007, 0.657, 0.728,
+                      0.680, 0.664, 0.222, -0.219,
+                      "Pose2 (cartesian)");
+
+    // Kartesisch diagonal (X + nach oben)
+    prompt("Press 'Next' for diagonal cartesian move");
+    if (!rclcpp::ok()) break;
+    move_cartesian_delta(0.0, -0.1, 0.1, "Diagonal");
+
+    prompt("Press 'Next' to OPEN gripper");
+    if (!rclcpp::ok()) break;
+    gripper_action("open", "Open");
+
+    // Zurück zu Home
+    prompt("Press 'Next' to return to HOME");
+    if (!rclcpp::ok()) break;
+    if (!move_to_joints(home_joints, "Home")) break;
   }
 
-  draw_trajectory_tool_path(plan.trajectory);
-  moveit_visual_tools.trigger();
-
-  prompt("Press 'Next' to execute the approach pose");
-  draw_title("Executing Approach");
-  moveit_visual_tools.trigger();
-  move_group_interface.execute(plan);
-
-auto current_stamped = move_group_interface.getCurrentPose();
-  geometry_msgs::msg::PoseStamped pose_in_base;   // <-- PoseStamped statt Pose
-  try {
-    pose_in_base = tf_buffer->transform(
-        current_stamped, "ur5e_base_link", tf2::durationFromSec(1.0));
-  } catch (const tf2::TransformException & ex) {
-    RCLCPP_ERROR(logger, "TF transform failed: %s", ex.what());
-    rclcpp::shutdown(); spinner.join(); return 1;
-  }
-  auto current_pose = pose_in_base.pose;  
-
-  geometry_msgs::msg::Pose down_pose = current_pose;
-  down_pose.position.z = current_pose.position.z - 0.1;  
-
-  RCLCPP_INFO(logger, "Current Pose: [%.2f, %.2f, %.2f]", current_pose.position.x, current_pose.position.y, current_pose.position.z);
-  RCLCPP_INFO(logger, "Target Pose:  [%.2f, %.2f, %.2f]", down_pose.position.x, down_pose.position.y, down_pose.position.z);
-
-  std::vector<geometry_msgs::msg::Pose> waypoints;
-  waypoints.push_back(down_pose);
-
-  // --- Klick 3: Plan Cartesian ---
-  prompt("Press 'Next' to plan the cartesian descent");
-  draw_title("Planning Descent (Cartesian)");
-  moveit_visual_tools.trigger();
-
-  moveit_msgs::msg::RobotTrajectory trajectory;
-  const double eef_step = 0.01;
-  const double jump_threshold = 0.0;
-  double fraction = move_group_interface.computeCartesianPath(
-    waypoints, eef_step, jump_threshold, trajectory);
-
-  RCLCPP_INFO(logger, "Cartesian path: %.2f%% achieved", fraction * 100.0);
-
-  if (fraction > 0.0) {
-    draw_trajectory_tool_path(trajectory);
-    moveit_visual_tools.trigger();
-
-    // --- Klick 4: Execute Cartesian ---
-    prompt("Press 'Next' to execute the cartesian descent");
-    draw_title("Executing Descent");
-    moveit_visual_tools.trigger();
-    move_group_interface.execute(trajectory);
-  } else {
-    draw_title("Cartesian Planning Failed!");
-    moveit_visual_tools.trigger();
-    RCLCPP_ERROR(logger, "Cartesian planning failed! Only %.2f%% achieved", fraction * 100.0);
-  }
-
+  RCLCPP_INFO(logger, "Beendet.");
   rclcpp::shutdown();
   spinner.join();
   return 0;
