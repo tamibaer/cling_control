@@ -36,6 +36,26 @@ const std::map<std::string, double> home_joints = {
   {"ur5e_wrist_2_joint",        0.0},
   {"ur5e_wrist_3_joint",        0.0}
 };
+
+const std::map<std::string, double> tear_end_pose_joints = {
+  {"ur5e_shoulder_pan_joint",  -0.9412},
+  {"ur5e_shoulder_lift_joint", -1.6168},
+  {"ur5e_elbow_joint",         -1.2161},
+  {"ur5e_wrist_1_joint",       -0.6703},
+  {"ur5e_wrist_2_joint",        1.4334},
+  {"ur5e_wrist_3_joint",       -0.5687}
+};
+
+
+const std::map<std::string, double> tear_joints = {
+  {"ur5e_shoulder_pan_joint",  -1.4927},
+  {"ur5e_shoulder_lift_joint", -1.4078},
+  {"ur5e_elbow_joint",         -1.5761},
+  {"ur5e_wrist_1_joint",       -0.4706},
+  {"ur5e_wrist_2_joint",       1.8433},
+  {"ur5e_wrist_3_joint",       -0.7474}
+};
+
 }  // namespace
 
 int main(int argc, char * argv[])
@@ -63,33 +83,62 @@ int main(int argc, char * argv[])
     if (!arm.prompt("Press 'Next' to move to PICK pose (or Ctrl+C to quit)")) break;
     if (!arm.moveToJoints(pick_joints, "Pick")) break;
 
-    if (!arm.prompt("Press 'Next' for cartesian DOWN")) break;
-    arm.moveCartesianDelta(0.0, 0.0, -0.1, "Down");
+    if (!arm.prompt("Press 'Next' for cartesian LEFT")) break;
+    arm.moveCartesianDelta(-0.13, 0.05, 0.0, "Left");
+    //arm.moveCartesianDelta(0.0, 0.05, 0.0, "Down");
 
-    // Nach dem Runterfahren: Gripper öffnen
-    if (!arm.prompt("Press 'Next' to OPEN gripper")) break;
-    arm.gripperAction("open", "Open");
-
-    // Zu Pose 1 (Greifposition) fahren
-    if (!arm.prompt("Press 'Next' to move to POSE 1")) break;
-    if (!arm.moveToJoints(pose1_joints, "Pose1")) break;
-
-    // Gripper schließen (greifen)
     if (!arm.prompt("Press 'Next' to CLOSE gripper")) break;
     arm.gripperAction("close", "Close");
 
-    // Kartesisch zu Pose 2 (Koordinaten aus tf2_echo)
-    if (!arm.prompt("Press 'Next' for cartesian move to POSE 2")) break;
-    arm.moveCartesianTo(0.007, 0.657, 0.728,
-                        0.680, 0.664, 0.222, -0.219,
-                        "Pose2 (cartesian)");
+   
+    if (!arm.prompt("Press 'Next' for cartesian DOWN")) break;
+    arm.moveCartesianDelta(0.0, -0.1, 0.0, "Down");
 
-    // Kartesisch diagonal (X + nach oben)
-    if (!arm.prompt("Press 'Next' for diagonal cartesian move")) break;
-    arm.moveCartesianDelta(0.0, -0.1, 0.1, "Diagonal");
+    //if (!arm.prompt("Press 'Next' to move to PICK pose (or Ctrl+C to quit)")) break;
+    //if (!arm.moveToJoints( tear_joints, "Pick")) break;
+
+    //if (!arm.prompt("Press 'Next' to move to PICK pose (or Ctrl+C to quit)")) break;
+    //if (!arm.moveToJoints( tear_end_pose_joints, "Pick")) break;
+
+    if (!arm.prompt("Press 'Next' for cartesian move to POSE 2")) break;
+     arm.moveCartesianDelta(0.35, 0.0, 0.3, "Left");
+
+
 
     if (!arm.prompt("Press 'Next' to OPEN gripper")) break;
     arm.gripperAction("open", "Open");
+
+    // 0.680, 0.664, 0.222, -0.219
+    //if (!arm.prompt("Press 'Next' for cartesian DOWN")) break;
+    //arm.moveCartesianDelta(0.0, 0.0, -0.1, "Down");
+
+    //if (!arm.prompt("Press 'Next' for cartesian DOWN")) break;
+    //arm.moveCartesianDelta(0.0, 0.1, 0.0, "Forward");
+
+    // Nach dem Runterfahren: Gripper öffnen
+    //if (!arm.prompt("Press 'Next' to OPEN gripper")) break;
+    //arm.gripperAction("open", "Open");
+
+    // Zu Pose 1 (Greifposition) fahren
+    //if (!arm.prompt("Press 'Next' to move to POSE 1")) break;
+    //if (!arm.moveToJoints(pose1_joints, "Pose1")) break;
+
+    // Gripper schließen (greifen)
+    //if (!arm.prompt("Press 'Next' to CLOSE gripper")) break;
+    //arm.gripperAction("close", "Close");
+
+    // Kartesisch zu Pose 2 (Koordinaten aus tf2_echo)
+    //if (!arm.prompt("Press 'Next' for cartesian move to POSE 2")) break;
+    //arm.moveCartesianTo(0.007, 0.657, 0.728,
+    //                    0.680, 0.664, 0.222, -0.219,
+    //                    "Pose2 (cartesian)");
+
+    // Kartesisch diagonal (X + nach oben)
+    //if (!arm.prompt("Press 'Next' for diagonal cartesian move")) break;
+    //arm.moveCartesianDelta(0.0, -0.1, 0.1, "Diagonal");
+
+    //if (!arm.prompt("Press 'Next' to OPEN gripper")) break;
+    //arm.gripperAction("open", "Open");
 
     // Zurück zu Home
     if (!arm.prompt("Press 'Next' to return to HOME")) break;
