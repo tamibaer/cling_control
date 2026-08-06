@@ -10,16 +10,22 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_visual_tools REQUIRED)
+find_package(moveit_servo REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
-add_executable(cling_control_node src/cling_control_node.cpp)
+add_executable(cling_control_node
+  src/cling_control_node.cpp
+)
 ament_target_dependencies(cling_control_node
   rclcpp
   moveit_ros_planning_interface
   moveit_visual_tools
+  moveit_servo
   tf2_ros
   tf2_geometry_msgs
+  geometry_msgs
 )
 
 install(TARGETS cling_control_node
@@ -30,6 +36,11 @@ install(DIRECTORY launch
 
 install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config)
+
+target_include_directories(cling_control_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
