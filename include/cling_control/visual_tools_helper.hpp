@@ -23,7 +23,7 @@ public:
   {
     auto const text_pose = [] {
       auto msg = Eigen::Isometry3d::Identity();
-      msg.translation().z() = 2.0;
+      msg.translation().z() = 2.1;
       return msg;
     }();
     visual_tools_.publishText(text_pose, text, rviz_visual_tools::WHITE, rviz_visual_tools::XLARGE);
