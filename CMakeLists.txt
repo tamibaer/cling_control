@@ -14,9 +14,13 @@ find_package(moveit_servo REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
+find_package(rosbag2_storage REQUIRED)
+find_package(rosbag2_transport REQUIRED)
 
 add_executable(cling_control_node
   src/cling_control_node.cpp
+  src/rosbag_recorder.cpp
 )
 ament_target_dependencies(cling_control_node
   rclcpp
@@ -26,6 +30,9 @@ ament_target_dependencies(cling_control_node
   tf2_ros
   tf2_geometry_msgs
   geometry_msgs
+  rosbag2_cpp
+  rosbag2_storage
+  rosbag2_transport
 )
 
 install(TARGETS cling_control_node
