@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <map>
 #include <memory>
 #include <string>
@@ -7,6 +8,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
+#include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -36,7 +38,7 @@ public:
     move_group_interface_.setPlanningTime(10.0);
     move_group_interface_.setNumPlanningAttempts(10);
     move_group_interface_.setMaxVelocityScalingFactor(0.5);
-    move_group_interface_.setMaxAccelerationScalingFactor(0.5);
+    move_group_interface_.setMaxAccelerationScalingFactor(0.05);
   }
 
   bool prompt(const std::string & text)
@@ -99,6 +101,52 @@ public:
     return executeCartesian(target, label);
   }
 
+  // Wie moveCartesianDelta, dreht zusaetzlich das Wrist-3-Gelenk (lokale Tool-Z-Achse)
+  // um den Winkel des Bewegungspfades in der X-Z-Ebene, sodass der Greifer waehrend
+  // des Reissens entlang des kartesischen Pfades ausgerichtet bleibt.
+  bool moveCartesianDeltaAligned(double dx, double dy, double dz, const std::string & label)
+  {
+    geometry_msgs::msg::Pose target;
+    if (!translatedTarget(dx, dy, dz, target)) {
+      return false;
+    }
+
+    // atan2(dz, dx) direkt wuerde bei Vorzeichenwechsel von dx (z.B. Reissen LINKS
+    // statt RECHTS) in den zweiten Quadranten springen (z.B. 140 statt -40 Grad) und
+    // so eine unnoetig grosse Zusatzdrehung erzeugen. Stattdessen den Neigungswinkel
+    // vorzeichenunabhaengig von dx berechnen und danach das Vorzeichen von dx wieder
+    // aufpraegen, damit RECHTS/LINKS symmetrisch gespiegelt werden.
+    const double path_angle_rad = std::copysign(std::atan2(dz, std::abs(dx)), dx);
+    applyLocalRotation(target, 0.0, 0.0, path_angle_rad);
+
+    RCLCPP_INFO(logger_, "%s: delta (%.3f, %.3f, %.3f), wrist3 %.1f deg -> [%.3f, %.3f, %.3f]",
+                label.c_str(), dx, dy, dz, path_angle_rad * 180.0 / M_PI,
+                target.position.x, target.position.y, target.position.z);
+
+    return executeCartesian(target, label);
+  }
+
+  // Wie moveCartesianDelta, dreht zusaetzlich das Wrist-2-Gelenk (lokale Tool-Y-Achse,
+  // solange Wrist-3 ~0 steht) um den Neigungswinkel des Pfades in der Y-Z-Ebene, sodass
+  // der Greifer beim Rueckzug/Vorspannen je nach vertikalem Pfadanteil nach oben oder
+  // unten ausgerichtet wird. dy ist hierbei die dominante (Rueckzugs-)Achse.
+  bool moveCartesianDeltaAlignedVertical(double dx, double dy, double dz, const std::string & label)
+  {
+    geometry_msgs::msg::Pose target;
+    if (!translatedTarget(dx, dy, dz, target)) {
+      return false;
+    }
+
+    const double vertical_path_angle_rad = -std::atan2(dz, -dy);
+    applyLocalRotation(target, 0.0, vertical_path_angle_rad, 0.0);
+
+    RCLCPP_INFO(logger_, "%s: delta (%.3f, %.3f, %.3f), wrist2 %.1f deg -> [%.3f, %.3f, %.3f]",
+                label.c_str(), dx, dy, dz, vertical_path_angle_rad * 180.0 / M_PI,
+                target.position.x, target.position.y, target.position.z);
+
+    return executeCartesian(target, label);
+  }
+
   bool moveCartesianTo(
     double x, double y, double z,
     double qx, double qy, double qz, double qw,
@@ -113,6 +161,37 @@ public:
   }
 
 private:
+  bool translatedTarget(double dx, double dy, double dz, geometry_msgs::msg::Pose & target)
+  {
+    auto current_stamped = move_group_interface_.getCurrentPose();
+    geometry_msgs::msg::PoseStamped pose_in_base;
+    try {
+      pose_in_base = tf_buffer_->transform(
+          current_stamped, "ur5e_base_link", tf2::durationFromSec(1.0));
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_ERROR(logger_, "TF transform failed: %s", ex.what());
+      return false;
+    }
+    target = pose_in_base.pose;
+    target.position.x += dx;
+    target.position.y += dy;
+    target.position.z += dz;
+    return true;
+  }
+
+  // Dreht target.orientation um roll/pitch/yaw im lokalen Tool-Frame (Wrist-3-Achse =
+  // lokales Z fuer yaw, Wrist-2-Achse bei Wrist-3~0 = lokales Y fuer pitch).
+  void applyLocalRotation(geometry_msgs::msg::Pose & target, double roll, double pitch, double yaw)
+  {
+    tf2::Quaternion current_orientation;
+    tf2::fromMsg(target.orientation, current_orientation);
+    tf2::Quaternion local_rotation;
+    local_rotation.setRPY(roll, pitch, yaw);
+    tf2::Quaternion target_orientation = current_orientation * local_rotation;
+    target_orientation.normalize();
+    target.orientation = tf2::toMsg(target_orientation);
+  }
+
   bool executeCartesian(const geometry_msgs::msg::Pose & target, const std::string & label)
   {
     std::vector<geometry_msgs::msg::Pose> waypoints{target};
