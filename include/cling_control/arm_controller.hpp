@@ -38,7 +38,7 @@ public:
     move_group_interface_.setPlanningTime(10.0);
     move_group_interface_.setNumPlanningAttempts(10);
     move_group_interface_.setMaxVelocityScalingFactor(0.5);
-    move_group_interface_.setMaxAccelerationScalingFactor(0.05);
+    move_group_interface_.setMaxAccelerationScalingFactor(0.5);
   }
 
   bool prompt(const std::string & text)

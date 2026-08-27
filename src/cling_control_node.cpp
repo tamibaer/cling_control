@@ -46,10 +46,7 @@ enum class TearDirection
 
 enum class GraspMode
 {
-  // Vor dem Greifen auf die der Reissrichtung gegenueberliegende Seite fahren.
   OPPOSITE_SIDE,
-
-  // Direkt von der mittleren START-Position zur Folie fahren.
   CENTER
 };
 
@@ -62,27 +59,18 @@ enum class TearOutcome
   NO_TEAR
 };
 
-// Feste Vorspannwinkel fuer alle Konfigurationen. Frueher pro RunConfig
-// einstellbar, jetzt bewusst fuer alle Laeufe gleich.
-constexpr double kTensionAngleDeg = -20.0;
+constexpr double kTensionAngleDeg = 0.0;
 constexpr double kTensionVerticalAngleDeg = -15.0;
 
 struct RunConfig
 {
-  // Exakte Strecke, die in -y-Richtung nach hinten gezogen wird.
   double pull_back_distance{0.10};
-
   double tear_angle_deg{40.0};
   double tear_distance{0.50};
-
   TearDirection tear_direction{TearDirection::RIGHT};
   GraspMode grasp_mode{GraspMode::OPPOSITE_SIDE};
 
-  // Strecke, die nach der Vorspannung (und dem Geradestellen) vor dem
-  // eigentlichen Reissen wieder in reiner +y-Richtung vorgefahren wird.
   double pre_tear_advance_distance{0.10};
-
-  // Zusaetzliche Strecke, die beim Vorfahren nach unten (-z) gefahren wird.
   double pre_tear_advance_down_distance{0.05};
 };
 
@@ -140,9 +128,6 @@ std::string outcomeToString(TearOutcome outcome)
 
 std::optional<TearOutcome> askTearOutcome()
 {
-  // Bei einem ueber ros2 launch gestarteten Node ist std::cin haeufig nicht
-  // mit dem sichtbaren Terminal verbunden. /dev/tty greift direkt auf das
-  // steuernde Terminal zu und erlaubt dort weiterhin die Auswahl 1 bis 5.
   std::ifstream terminal_input("/dev/tty");
   if (!terminal_input.is_open()) {
     return std::nullopt;
@@ -190,8 +175,6 @@ std::optional<TearOutcome> askTearOutcome()
 
 std::optional<double> askManualPullOutDistanceCm()
 {
-  // Siehe askTearOutcome: /dev/tty wird benoetigt, damit die Eingabe auch bei
-  // per ros2 launch gestarteten Nodes funktioniert.
   std::ifstream terminal_input("/dev/tty");
   if (!terminal_input.is_open()) {
     return std::nullopt;
@@ -261,7 +244,8 @@ void appendResultCsv(
 
 CartesianDelta calculateMoveToGraspDelta(
   const RunConfig & config,
-  double lateral_offset,
+  double lateral_offset_left,
+  double lateral_offset_right,
   double approach_distance)
 {
   if (config.grasp_mode == GraspMode::CENTER) {
@@ -270,28 +254,16 @@ CartesianDelta calculateMoveToGraspDelta(
 
   // Zum Reissen nach links wird rechts gegriffen und umgekehrt.
   const double x = config.tear_direction == TearDirection::LEFT ?
-    lateral_offset : -lateral_offset;
+    lateral_offset_right : -lateral_offset_left;
 
   return {x, approach_distance, 0.0};
 }
 
-// Die Vorspannrichtung wird durch die Rueckzugsstrecke und zwei feste Winkel
-// (kTensionAngleDeg, kTensionVerticalAngleDeg) beschrieben:
-//   kTensionAngleDeg:
-//     0 Grad  -> gerade nach hinten in -y-Richtung
-//     > 0 Grad -> zusaetzliche positive x-Komponente
-//     < 0 Grad -> zusaetzliche negative x-Komponente
-//   kTensionVerticalAngleDeg:
-//     0 Grad  -> horizontal
-//     > 0 Grad -> nach oben (+z)
-//     < 0 Grad -> nach unten (-z)
 CartesianDelta calculateTensionDelta(const RunConfig & config)
 {
   const double side_angle_rad = degreesToRadians(kTensionAngleDeg);
   const double vertical_angle_rad = degreesToRadians(kTensionVerticalAngleDeg);
 
-  // Die y-Komponente bleibt immer exakt -pull_back_distance. Die beiden
-  // Winkel erzeugen unabhaengig davon seitliche und vertikale Komponenten.
   return {
     config.pull_back_distance * std::tan(side_angle_rad),
     -config.pull_back_distance,
@@ -299,10 +271,6 @@ CartesianDelta calculateTensionDelta(const RunConfig & config)
   };
 }
 
-// Der Reisswinkel liegt in der x-z-Ebene:
-//   0 Grad  -> horizontal entlang x
-//   90 Grad -> senkrecht nach oben
-// LEFT/RIGHT bestimmt das Vorzeichen der x-Komponente.
 CartesianDelta calculateTearDelta(const RunConfig & config)
 {
   const double angle_rad = degreesToRadians(config.tear_angle_deg);
@@ -368,7 +336,7 @@ int main(int argc, char * argv[])
     "robotiq_gripper");
 
   const std::string bag_base_dir =
-    "/mnt/dattelspeicher/rosbags/tearing_experiment_test";
+    "/home/bergerhoff/Documents/cling_foil_tearing_dataset_2";
 
   const std::string results_csv = bag_base_dir + "/results.csv";
 
@@ -377,7 +345,8 @@ int main(int argc, char * argv[])
   const auto step_delay = std::chrono::seconds(1);
   const auto tension_hold_time = std::chrono::seconds(2);
   const auto post_tear_recording_time = std::chrono::milliseconds(500);
-  constexpr double grasp_lateral_offset = 0.13;
+  constexpr double grasp_lateral_offset_left = 0.10;
+  constexpr double grasp_lateral_offset_right = 0.12; 
   constexpr double grasp_approach_distance = 0.05;
 
   RosbagRecorder::Options bag_options;
@@ -394,19 +363,18 @@ int main(int argc, char * argv[])
     "/camera/D415/depth/image_rect_raw",
     "/camera/D415/depth/camera_info"
   };
+//pull_back_distance
+//tear_angle_degree
+//tear_distance
+//tear_direction
+//grasp_mode
 
   const std::vector<RunConfig> run_configs = {
-    {0.12, 40.0, 0.50, TearDirection::LEFT, GraspMode::OPPOSITE_SIDE},
-    {0.08, 40.0, 0.50, TearDirection::RIGHT, GraspMode::OPPOSITE_SIDE},
-    {0.10, 40.0, 0.50, TearDirection::RIGHT, GraspMode::OPPOSITE_SIDE},
-    {0.10, 40.0, 0.50, TearDirection::LEFT, GraspMode::OPPOSITE_SIDE},
-    {0.10, 40.0, 0.50, TearDirection::RIGHT, GraspMode::CENTER},
-    {0.10, 40.0, 0.50, TearDirection::LEFT, GraspMode::CENTER}
+    {0.10, 30.0, 0.70, TearDirection::RIGHT, GraspMode::OPPOSITE_SIDE},
+    {0.10, 30.0, 0.70, TearDirection::LEFT, GraspMode::OPPOSITE_SIDE},
   };
 
-  constexpr int repetitions_per_config = 5;
-
-  // Jede Konfiguration wird fuenfmal direkt hintereinander eingeplant.
+  constexpr int repetitions_per_config = 10;
   std::vector<ScheduledRun> scheduled_runs;
   scheduled_runs.reserve(run_configs.size() * repetitions_per_config);
 
@@ -437,7 +405,7 @@ int main(int argc, char * argv[])
     const CartesianDelta tension_delta = calculateTensionDelta(config);
     const CartesianDelta tear_delta = calculateTearDelta(config);
     const CartesianDelta grasp_delta = calculateMoveToGraspDelta(
-      config, grasp_lateral_offset, grasp_approach_distance);
+      config, grasp_lateral_offset_left, grasp_lateral_offset_right, grasp_approach_distance);
 
     RCLCPP_INFO(
       logger,
@@ -472,8 +440,6 @@ int main(int argc, char * argv[])
     if (!arm.moveToJoints(start_joints, "START")) {
       break;
     }
-
-    //waitForNextStep(logger, step_delay, "Fahrt zum Greifpunkt");
 
     RCLCPP_INFO(
       logger,
@@ -527,8 +493,6 @@ int main(int argc, char * argv[])
 
       RosbagRecorder bag(bag_path, bag_options);
 
-      // Orientierung vor der (moeglicherweise geneigten) Vorspannung merken, um sie
-      // vor dem eigentlichen Reissen wieder herstellen zu koennen.
       const auto pre_tension_orientation = arm.getCurrentOrientation();
 
       RCLCPP_INFO(
@@ -611,8 +575,6 @@ int main(int argc, char * argv[])
         "\033[1;31mRosbag fuer Zyklus %d abgeschlossen.\033[0m",
         cycle);
 
-      // Erst nach dem Schliessen der Bag labeln. Die Dauer der manuellen
-      // Eingabe beeinflusst dadurch nicht die Laenge der Aufnahme.
       const auto outcome = askTearOutcome();
       if (!outcome.has_value()) {
         RCLCPP_ERROR(
@@ -654,15 +616,8 @@ int main(int argc, char * argv[])
     }
 
     waitForNextStep(logger, step_delay, "naechsten Versuch");
-
-    // Optional nach jedem Versuch zur sicheren HOME-Pose zurueckfahren:
-    // if (!arm.moveToJoints(home_joints, "HOME")) {
-    //   break;
-    // }
   }
 
-  // Nach dem letzten regulaeren Lauf gibt es keine naechste START-Pose mehr.
-  // Deshalb den Greifer vor dem Beenden noch einmal kontrolliert oeffnen.
   if (rclcpp::ok()) {
     waitForNextStep(logger, step_delay, "Greifer abschliessend oeffnen");
     if (!arm.gripperAction("open", "FINAL OPEN")) {
