@@ -147,6 +147,39 @@ public:
     return executeCartesian(target, label);
   }
 
+  // Liefert die aktuelle Werkzeugorientierung im Basis-Frame, z.B. um sie vor
+  // einer geneigten Vorspannung zu sichern und spaeter wiederherzustellen.
+  geometry_msgs::msg::Quaternion getCurrentOrientation()
+  {
+    auto current_stamped = move_group_interface_.getCurrentPose();
+    geometry_msgs::msg::PoseStamped pose_in_base;
+    try {
+      pose_in_base = tf_buffer_->transform(
+          current_stamped, "ur5e_base_link", tf2::durationFromSec(1.0));
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_ERROR(logger_, "TF transform failed: %s", ex.what());
+      return current_stamped.pose.orientation;
+    }
+    return pose_in_base.pose.orientation;
+  }
+
+  // Dreht den Greifer an der aktuellen Position auf die uebergebene Orientierung,
+  // ohne die Position zu veraendern. Damit laesst sich z.B. eine durch die
+  // Vorspannung gekippte Ausrichtung vor dem Reissen wieder gerade stellen.
+  bool moveToOrientation(
+    const geometry_msgs::msg::Quaternion & orientation, const std::string & label)
+  {
+    geometry_msgs::msg::Pose target;
+    if (!translatedTarget(0.0, 0.0, 0.0, target)) {
+      return false;
+    }
+    target.orientation = orientation;
+
+    RCLCPP_INFO(logger_, "%s: Orientierung wird an aktueller Position zurueckgesetzt", label.c_str());
+
+    return executeCartesian(target, label);
+  }
+
   bool moveCartesianTo(
     double x, double y, double z,
     double qx, double qy, double qz, double qw,

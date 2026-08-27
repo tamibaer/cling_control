@@ -481,6 +481,10 @@ int main(int argc, char * argv[])
 
       RosbagRecorder bag(bag_path, bag_options);
 
+      // Orientierung vor der (moeglicherweise geneigten) Vorspannung merken, um sie
+      // vor dem eigentlichen Reissen wieder herstellen zu koennen.
+      const auto pre_tension_orientation = arm.getCurrentOrientation();
+
       RCLCPP_INFO(
         logger,
         "Vorspannung: Seite %.1f deg, Vertikal %.1f deg, Rueckzug %.3f m, "
@@ -506,6 +510,14 @@ int main(int argc, char * argv[])
         "\033[1;33mWarte 2 Sekunden vor dem Reissen ...\033[0m");
 
       std::this_thread::sleep_for(tension_hold_time);
+
+      RCLCPP_INFO(
+        logger,
+        "\033[1;33mGreifer wird vor dem Reissen wieder gerade gestellt ...\033[0m");
+
+      if (!arm.moveToOrientation(pre_tension_orientation, "STRAIGHTEN BEFORE TEAR")) {
+        break;
+      }
 
       RCLCPP_INFO(
         logger,
