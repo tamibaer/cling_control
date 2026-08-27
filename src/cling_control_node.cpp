@@ -62,14 +62,13 @@ enum class TearOutcome
   NO_TEAR
 };
 
+// Feste Vorspannwinkel fuer alle Konfigurationen. Frueher pro RunConfig
+// einstellbar, jetzt bewusst fuer alle Laeufe gleich.
+constexpr double kTensionAngleDeg = -20.0;
+constexpr double kTensionVerticalAngleDeg = -15.0;
+
 struct RunConfig
 {
-  // Seitlicher Winkel der Vorspannung in der x-y-Ebene.
-  double tension_angle_deg{0.0};
-
-  // Vertikaler Winkel: positiv nach oben, negativ nach unten.
-  double tension_vertical_angle_deg{0.0};
-
   // Exakte Strecke, die in -y-Richtung nach hinten gezogen wird.
   double pull_back_distance{0.10};
 
@@ -189,11 +188,45 @@ std::optional<TearOutcome> askTearOutcome()
   }
 }
 
+std::optional<double> askManualPullOutDistanceCm()
+{
+  // Siehe askTearOutcome: /dev/tty wird benoetigt, damit die Eingabe auch bei
+  // per ros2 launch gestarteten Nodes funktioniert.
+  std::ifstream terminal_input("/dev/tty");
+  if (!terminal_input.is_open()) {
+    return std::nullopt;
+  }
+
+  while (true) {
+    std::cout
+      << "\nWie viele cm wurde die Folie zum Einlegen in den Greifer "
+      << "herausgezogen? "
+      << std::flush;
+
+    double value_cm = 0.0;
+    if (terminal_input >> value_cm) {
+      if (value_cm >= 0.0) {
+        return value_cm;
+      }
+    } else if (terminal_input.eof()) {
+      return std::nullopt;
+    }
+
+    terminal_input.clear();
+    terminal_input.ignore(
+      std::numeric_limits<std::streamsize>::max(),
+      '\n');
+
+    std::cout << "Ungueltige Eingabe. Bitte eine nicht-negative Zahl in cm eingeben.\n";
+  }
+}
+
 void appendResultCsv(
   const std::string & csv_path,
   const std::string & bag_path,
   const ScheduledRun & run,
-  const std::string & outcome)
+  const std::string & outcome,
+  double manual_pull_out_m)
 {
   const bool file_exists = std::filesystem::exists(csv_path);
   std::ofstream file(csv_path, std::ios::app);
@@ -204,10 +237,10 @@ void appendResultCsv(
 
   if (!file_exists) {
     file
-      << "bag_path,config,run,tension_side_deg,tension_vertical_deg,"
+      << "bag_path,config,run,"
       << "pull_back_m,pre_tear_advance_m,pre_tear_advance_down_m,"
       << "tear_angle_deg,tear_distance_m,tear_direction,"
-      << "grasp_position,outcome\n";
+      << "grasp_position,manual_pull_out_m,outcome\n";
   }
 
   const RunConfig & config = run.config;
@@ -215,8 +248,6 @@ void appendResultCsv(
     << bag_path << ','
     << run.config_number << ','
     << run.repetition << ','
-    << config.tension_angle_deg << ','
-    << config.tension_vertical_angle_deg << ','
     << config.pull_back_distance << ','
     << config.pre_tear_advance_distance << ','
     << config.pre_tear_advance_down_distance << ','
@@ -224,6 +255,7 @@ void appendResultCsv(
     << config.tear_distance << ','
     << directionToString(config.tear_direction) << ','
     << graspPositionToString(config) << ','
+    << manual_pull_out_m << ','
     << outcome << '\n';
 }
 
@@ -243,20 +275,20 @@ CartesianDelta calculateMoveToGraspDelta(
   return {x, approach_distance, 0.0};
 }
 
-// Die Vorspannrichtung wird durch die Rueckzugsstrecke und zwei Winkel beschrieben:
-//   tension_angle_deg:
+// Die Vorspannrichtung wird durch die Rueckzugsstrecke und zwei feste Winkel
+// (kTensionAngleDeg, kTensionVerticalAngleDeg) beschrieben:
+//   kTensionAngleDeg:
 //     0 Grad  -> gerade nach hinten in -y-Richtung
 //     > 0 Grad -> zusaetzliche positive x-Komponente
 //     < 0 Grad -> zusaetzliche negative x-Komponente
-//   tension_vertical_angle_deg:
+//   kTensionVerticalAngleDeg:
 //     0 Grad  -> horizontal
 //     > 0 Grad -> nach oben (+z)
 //     < 0 Grad -> nach unten (-z)
 CartesianDelta calculateTensionDelta(const RunConfig & config)
 {
-  const double side_angle_rad = degreesToRadians(config.tension_angle_deg);
-  const double vertical_angle_rad =
-    degreesToRadians(config.tension_vertical_angle_deg);
+  const double side_angle_rad = degreesToRadians(kTensionAngleDeg);
+  const double vertical_angle_rad = degreesToRadians(kTensionVerticalAngleDeg);
 
   // Die y-Komponente bleibt immer exakt -pull_back_distance. Die beiden
   // Winkel erzeugen unabhaengig davon seitliche und vertikale Komponenten.
@@ -356,16 +388,20 @@ int main(int argc, char * argv[])
     "/joint_states",
     "/robot_description",
     "/tf",
-    "/tf_static"
+    "/tf_static",
+    "/camera/D415/color/image_raw",
+    "/camera/D415/color/camera_info",
+    "/camera/D415/depth/image_rect_raw",
+    "/camera/D415/depth/camera_info"
   };
 
   const std::vector<RunConfig> run_configs = {
-    {-20.0, -15.0, 0.12, 40.0, 0.50, TearDirection::LEFT, GraspMode::OPPOSITE_SIDE},
-    {20.0, 0.0, 0.08, 40.0, 0.50, TearDirection::RIGHT, GraspMode::OPPOSITE_SIDE},
-    {0.0, 0.0, 0.10, 40.0, 0.50, TearDirection::RIGHT, GraspMode::OPPOSITE_SIDE},
-    {0.0, 0.0, 0.10, 40.0, 0.50, TearDirection::LEFT, GraspMode::OPPOSITE_SIDE},
-    {0.0, 0.0, 0.10, 40.0, 0.50, TearDirection::RIGHT, GraspMode::CENTER},
-    {0.0, 0.0, 0.10, 40.0, 0.50, TearDirection::LEFT, GraspMode::CENTER}
+    {0.12, 40.0, 0.50, TearDirection::LEFT, GraspMode::OPPOSITE_SIDE},
+    {0.08, 40.0, 0.50, TearDirection::RIGHT, GraspMode::OPPOSITE_SIDE},
+    {0.10, 40.0, 0.50, TearDirection::RIGHT, GraspMode::OPPOSITE_SIDE},
+    {0.10, 40.0, 0.50, TearDirection::LEFT, GraspMode::OPPOSITE_SIDE},
+    {0.10, 40.0, 0.50, TearDirection::RIGHT, GraspMode::CENTER},
+    {0.10, 40.0, 0.50, TearDirection::LEFT, GraspMode::CENTER}
   };
 
   constexpr int repetitions_per_config = 5;
@@ -415,8 +451,8 @@ int main(int argc, char * argv[])
       scheduled_run.repetition,
       repetitions_per_config,
       graspPositionToString(config).c_str(),
-      config.tension_angle_deg,
-      config.tension_vertical_angle_deg,
+      kTensionAngleDeg,
+      kTensionVerticalAngleDeg,
       config.pull_back_distance,
       directionToString(config.tear_direction).c_str(),
       config.tear_angle_deg);
@@ -499,8 +535,8 @@ int main(int argc, char * argv[])
         logger,
         "Vorspannung: Seite %.1f deg, Vertikal %.1f deg, Rueckzug %.3f m, "
         "Delta [%.3f, %.3f, %.3f] m",
-        config.tension_angle_deg,
-        config.tension_vertical_angle_deg,
+        kTensionAngleDeg,
+        kTensionVerticalAngleDeg,
         config.pull_back_distance,
         tension_delta.x,
         tension_delta.y,
@@ -592,12 +628,23 @@ int main(int argc, char * argv[])
         "\033[1;36mVersuch gelabelt als: %s\033[0m",
         outcome_text.c_str());
 
+      const auto manual_pull_out_cm = askManualPullOutDistanceCm();
+      if (!manual_pull_out_cm.has_value()) {
+        RCLCPP_ERROR(
+          logger,
+          "Keine Konsoleneingabe fuer die Herausziehstrecke verfuegbar. Versuch wird beendet.");
+        break;
+      }
+
+      const double manual_pull_out_m = *manual_pull_out_cm / 100.0;
+
       try {
         appendResultCsv(
           results_csv,
           bag_path,
           scheduled_run,
-          outcome_text);
+          outcome_text,
+          manual_pull_out_m);
       } catch (const std::exception & exception) {
         RCLCPP_ERROR(
           logger,

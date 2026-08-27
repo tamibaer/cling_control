@@ -1,4 +1,6 @@
 from launch import LaunchDescription
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
@@ -45,4 +47,34 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription([rviz_node, move_group_node, cling_control])
+    realsense_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("realsense2_camera"),
+                "launch",
+                "rs_launch.py",
+            )
+        ),
+        launch_arguments={
+            "camera_name": "D415",
+            "serial_no": '"241222063543"',
+        }.items(),
+    )
+
+    camera_static_transform = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        arguments=[
+            "-0.031", "0.755", "1.206",
+            "0.562", "-0.562", "-0.425", "-0.433",
+            "ur5e_base_link", "D415_link",
+        ],
+    )
+
+    return LaunchDescription([
+        rviz_node,
+        move_group_node,
+        cling_control,
+        realsense_launch,
+        camera_static_transform,
+    ])
