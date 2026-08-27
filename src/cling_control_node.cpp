@@ -78,6 +78,13 @@ struct RunConfig
 
   TearDirection tear_direction{TearDirection::RIGHT};
   GraspMode grasp_mode{GraspMode::OPPOSITE_SIDE};
+
+  // Strecke, die nach der Vorspannung (und dem Geradestellen) vor dem
+  // eigentlichen Reissen wieder in reiner +y-Richtung vorgefahren wird.
+  double pre_tear_advance_distance{0.10};
+
+  // Zusaetzliche Strecke, die beim Vorfahren nach unten (-z) gefahren wird.
+  double pre_tear_advance_down_distance{0.05};
 };
 
 struct ScheduledRun
@@ -198,7 +205,8 @@ void appendResultCsv(
   if (!file_exists) {
     file
       << "bag_path,config,run,tension_side_deg,tension_vertical_deg,"
-      << "pull_back_m,tear_angle_deg,tear_distance_m,tear_direction,"
+      << "pull_back_m,pre_tear_advance_m,pre_tear_advance_down_m,"
+      << "tear_angle_deg,tear_distance_m,tear_direction,"
       << "grasp_position,outcome\n";
   }
 
@@ -210,6 +218,8 @@ void appendResultCsv(
     << config.tension_angle_deg << ','
     << config.tension_vertical_angle_deg << ','
     << config.pull_back_distance << ','
+    << config.pre_tear_advance_distance << ','
+    << config.pre_tear_advance_down_distance << ','
     << config.tear_angle_deg << ','
     << config.tear_distance << ','
     << directionToString(config.tear_direction) << ','
@@ -516,6 +526,21 @@ int main(int argc, char * argv[])
         "\033[1;33mGreifer wird vor dem Reissen wieder gerade gestellt ...\033[0m");
 
       if (!arm.moveToOrientation(pre_tension_orientation, "STRAIGHTEN BEFORE TEAR")) {
+        break;
+      }
+
+      RCLCPP_INFO(
+        logger,
+        "Fahre vor dem Reissen %.3f m nach vorne / %.3f m nach unten ...",
+        config.pre_tear_advance_distance,
+        config.pre_tear_advance_down_distance);
+
+      if (!arm.moveCartesianDelta(
+          0.0,
+          config.pre_tear_advance_distance,
+          -config.pre_tear_advance_down_distance,
+          "PRE-TEAR ADVANCE"))
+      {
         break;
       }
 
